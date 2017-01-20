@@ -6,13 +6,13 @@ use std::fs;
 use std::path;
 use std::error;
 use std::ascii::AsciiExt;
-
+use std::collections::HashMap;
 
 
 struct Relation {
     pub filename: String,
     pub name: String,
-    data: Vec<Instance>,
+    data: Vec<Box<[Value]>>,
     schema: Vec<AttributeFormat>,
 }
 
@@ -23,11 +23,7 @@ struct AttributeFormat {
 
 enum AttributeType {
     Numeric,
-    Nominal(Vec<String>),
-}
-
-struct Instance {
-    values: Vec<Value>,
+    Nominal(Vec<String>, HashMap<String, usize>),
 }
 
 enum Value {
@@ -36,7 +32,7 @@ enum Value {
     Missing,
 }
 
-fn next_quoted(iter: &mut Iterator<Item=&str>, split: char) -> Option<String> {
+fn next_quoted(iter: &mut Iterator<Item = &str>, split: char) -> Option<String> {
     while let Some(token) = iter.next() {
         if token.is_empty() { continue; }
         if token.starts_with("'") {
@@ -63,7 +59,7 @@ fn next_quoted(iter: &mut Iterator<Item=&str>, split: char) -> Option<String> {
 }
 
 impl AttributeType {
-    fn parse(type_str: &str) -> Result<AttributeType, String> {
+    fn parse_schema(type_str: &str) -> Result<AttributeType, String> {
         if ["real", "continuous", "integer"].iter().any(|x| type_str.eq_ignore_ascii_case(x)) {
             return Ok(AttributeType::Numeric);
         }
@@ -79,7 +75,13 @@ impl AttributeType {
         if values.len() == 0 {
             Err("Incomplete nominal attribute type".to_string())
         } else {
-            Ok(AttributeType::Nominal(values))
+            let mut reversed = HashMap::new();
+            for (n, value) in (&values).into_iter().enumerate() {
+                if reversed.insert(value.clone(), n).is_some() {
+                    return Err(format!("Duplicate nominal attribute: {}", value));
+                }
+            }
+            Ok(AttributeType::Nominal(values, reversed))
         }
     }
 }
@@ -92,18 +94,18 @@ impl Relation {
             return Ok(false);
         }
         let token = token.unwrap();
-//        .map(|x| x.to_ascii_lowercase());
+        //        .map(|x| x.to_ascii_lowercase());
         match token.as_ref() {
             "@relation" => {
                 self.name = next_quoted(&mut tokens, ' ')
                     .ok_or("No relation name given")?.to_string();
                 Ok(false)
-            } ,
+            },
             "@attribute" => {
                 let name = next_quoted(&mut tokens, ' ').ok_or("No attribute name given")?;
                 let entry = AttributeFormat {
                     name: name,
-                    attr_type: AttributeType::parse(
+                    attr_type: AttributeType::parse_schema(
                         tokens.collect::<Vec<_>>().join(" ").trim()
                     )?
                 };
@@ -117,8 +119,27 @@ impl Relation {
     }
 
     fn load_data_line(&mut self, line: &str) -> Result<(), String> {
-        let values = line.split();
-        unimplemented!();
+        let data: Result<Vec<_>, String> =
+        line.split(',').map(|x| x.trim()).zip(self.schema.iter()).map(|(token, attr)| {
+            if token == "?" {
+                Ok(Value::Missing)
+            } else {
+                match attr.attr_type {
+                    AttributeType::Numeric =>
+                        token.parse::<f64>().map(|x| Value::Numeric(x)).map_err(|x| x.to_string()),
+                    AttributeType::Nominal(_, ref value_names) =>
+                        value_names.get(token).ok_or(format!("Unrecognized value {}", token))
+                            .map(|x| Value::Nominal(*x))
+                }
+            }
+        }).collect();
+        let data = data?;
+        if data.len() != self.schema.len() {
+            return Err(format!("Data length ({}) does not match schema length ({})",
+                        data.len(), self.schema.len()))
+        }
+        self.data.push(data.into_boxed_slice());
+        Ok(())
     }
 
     pub fn load_arff(filename: &path::Path) -> Result<Relation, Box<error::Error>> {
@@ -145,5 +166,27 @@ impl Relation {
         }
 
         Ok(result)
+    }
+
+    pub fn row(&self, n: usize) -> Option<&[Value]> {
+        match self.data.get(n) {
+            Some(row) => Some(row),
+            None => None,
+        }
+    }
+
+    pub fn row_mut(&mut self, n: usize) -> Option<&mut [Value]> {
+        match self.data.get_mut(n) {
+            Some(row) => Some(row),
+            None => None,
+        }
+    }
+
+    pub fn col(&self, n: usize) -> Option<Vec<&Value>> {
+        self.data.iter().map(|x| x.get(n)).collect()
+    }
+
+    pub fn col_mut(&mut self, n: usize) -> Option<Vec<&mut Value>> {
+        self.data.iter_mut().map(|x| x.get_mut(n)).collect()
     }
 }

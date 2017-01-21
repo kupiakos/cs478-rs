@@ -5,6 +5,7 @@ use std::io::BufRead;
 use std::fs;
 use std::path;
 use std::error;
+use std::ops;
 use std::ascii::AsciiExt;
 use std::collections::HashMap;
 
@@ -182,11 +183,51 @@ impl Relation {
         }
     }
 
+    pub fn rows(&self) -> usize {
+        self.schema.len()
+    }
+
     pub fn col(&self, n: usize) -> Option<Vec<&Value>> {
         self.data.iter().map(|x| x.get(n)).collect()
     }
 
     pub fn col_mut(&mut self, n: usize) -> Option<Vec<&mut Value>> {
         self.data.iter_mut().map(|x| x.get_mut(n)).collect()
+    }
+
+    pub fn cols(&self) -> usize {
+        self.schema.len()
+    }
+
+    pub fn get(&self, row: usize, col: usize) -> Option<&Value> {
+        self.data.get(row).and_then(|r| r.get(col))
+    }
+
+    pub fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut Value> {
+        self.data.get_mut(row).and_then(|r| r.get_mut(col))
+    }
+
+    pub fn attr_name(&self, col: usize) -> &str {
+        &self.schema[col].name
+    }
+
+    pub fn attr_type(&self, col: usize) -> &AttributeType {
+        &self.schema[col].attr_type
+    }
+}
+
+impl ops::Index<(usize, usize)> for Relation {
+    type Output = Value;
+
+    /// Row-major order (row, col)
+    fn index(&self, (row, col): (usize, usize)) -> &Self::Output {
+        &self.data[row][col]
+    }
+}
+
+impl ops::IndexMut<(usize, usize)> for Relation {
+    /// Row-major order (row, col)
+    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut Self::Output {
+        &mut self.data[row][col]
     }
 }
